@@ -11,12 +11,10 @@ app.use(express.json({ limit: "10mb" }));
 
 const upload = multer({ dest: os.tmpdir() });
 
-// ---- Helpers ----
 function runTesseract(imgPath) {
   return new Promise((resolve, reject) => {
-    // lang: Portuguese + English; psm 6 = uniform block of text
     const args = ["-l", "por+eng", "--psm", "6", imgPath, "stdout", "--dpi", "300"];
-    execFile("tesseract", args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile("tesseract", args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
       if (err) return reject(err);
       resolve(stdout.toString());
     });
@@ -39,13 +37,10 @@ function parseFields(text) {
   return { text, cnpj, cnpj_compact: cnpjCompact, valor, ok: Boolean(cnpj && valor) };
 }
 
-// ---- Routes ----
-// Healthcheck
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "sindpan-ocr-service" });
+  res.status(200).json({ ok: true, service: "sindpan-ocr-service" });
 });
 
-// POST /ocr with multipart (file) OR JSON { url: "https://..." }
 app.post("/ocr", upload.single("file"), async (req, res) => {
   try {
     let imgPath = req.file?.path;
@@ -61,17 +56,9 @@ app.post("/ocr", upload.single("file"), async (req, res) => {
 
     if (!imgPath) return res.status(400).json({ error: "Envie 'file' (multipart) ou { url } em JSON" });
 
-    // TODO (opcional): pré-processamento para melhorar contraste usando ImageMagick
-    // Exemplo: binarização/normalize
-    // await new Promise((resolve, reject) => {
-    //   execFile("convert", [imgPath, "-colorspace", "Gray", "-normalize", "-threshold", "55%", imgPath],
-    //     (err) => (err ? reject(err) : resolve()));
-    // });
-
     const text = await runTesseract(imgPath);
     const out = parseFields(text);
 
-    // Limpeza do arquivo temporário de upload
     if (req.file?.path) fs.unlink(req.file.path, () => {});
 
     return res.json(out);
@@ -81,5 +68,18 @@ app.post("/ocr", upload.single("file"), async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`OCR server on :${PORT}`));
+const PORT = Number(process.env.PORT || 8080);
+const HOST = "0.0.0.0";
+const server = app.listen(PORT, HOST, () => {
+  console.log(`OCR server listening on http://${HOST}:${PORT}`);
+});
+
+// Graceful shutdown (helps avoid restart loops without logs)
+process.on("SIGTERM", () => {
+  console.log("Received SIGTERM, shutting down gracefully...");
+  server.close(() => process.exit(0));
+});
+process.on("SIGINT", () => {
+  console.log("Received SIGINT, shutting down gracefully...");
+  server.close(() => process.exit(0));
+});
